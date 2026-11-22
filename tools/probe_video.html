@@ -1,0 +1,15 @@
+<!DOCTYPE html><meta charset="utf-8"><title>probe</title><body style="background:#000">
+<video id="v" muted preload="auto"></video><canvas id="c"></canvas>
+<script>
+// Grabs 24 evenly spaced frames into one contact sheet (to see where the burned-in lyrics are) and reports duration/size.
+const Q = new URLSearchParams(location.search), v = document.getElementById('v'), cv = document.getElementById('c'), g = cv.getContext('2d');
+const seek = t => new Promise(r => { const h = () => { v.removeEventListener('seeked', h); r(); }; v.addEventListener('seeked', h); v.currentTime = t; });
+v.src = Q.get('video');
+v.onerror = () => { window.__RESULT = JSON.stringify({ error: 'video error ' + (v.error && v.error.code) }); document.title = 'ERROR'; };
+v.onloadedmetadata = async () => {
+  const n = 24, W = 180, H = Math.round(W * v.videoHeight / v.videoWidth), cols = 8; cv.width = W * cols; cv.height = H * Math.ceil(n / cols);
+  const from = +(Q.get('from') || 0), to = +(Q.get('to') || v.duration);
+  for (let i = 0; i < n; i++) { const t = from + (to - from) * (i + .5) / n; await seek(t); g.drawImage(v, (i % cols) * W, Math.floor(i / cols) * H, W, H); g.fillStyle = '#0f0'; g.font = '14px sans-serif'; g.fillText(t.toFixed(1) + 's', (i % cols) * W + 4, Math.floor(i / cols) * H + 16); }
+  window.__RESULT = JSON.stringify({ duration: v.duration, w: v.videoWidth, h: v.videoHeight, png: cv.toDataURL('image/jpeg', .8) }); document.title = 'DONE';
+};
+</script>

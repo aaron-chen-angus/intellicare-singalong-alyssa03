@@ -1,0 +1,12 @@
+﻿
+DOCX: C:\Users\aaron_chen_angus\OneDrive - Republic Polytechnic\Backup from Computer\Artificial Intelligence Projects\IntelliCARE\IntelliCARE Phase 3 Content Plans\Learn Singing with Alyssa MMOs\城里的月光 Lyrics and Credits.docx
+LYRICS lines: 10
+TOOL python = C:\Users\aaron_chen_angus\AppData\Local\Microsoft\WindowsApps\python.exe
+TOOL py = -
+TOOL ffmpeg = -
+TOOL whisper = -
+TOOL pip = -
+PYVER Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+PYMODS Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+VIDEO C:\Users\AARON_~1\AppData\Local\Temp\alyssa_ep03.mp4 485.6 MB
+PREP DONE

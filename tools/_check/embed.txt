@@ -1,0 +1,1 @@
+{"demo":false,"notes":6,"f0":700,"rms":140,"n0":{"t0":0.5,"t1":1.33,"c":5700,"gold":false,"vib":null,"phrase":0,"i":0,"sec":"singalong","scored":true},"dur":7,"max":5533,"errs":[]}

@@ -1,0 +1,1 @@
+{"true":"NotSupportedError: Not supported","ec-off":"NotSupportedError: Not supported","ch1":"NotSupportedError: Not supported","devices":["audioinput:","videoinput:","audiooutput:"]}

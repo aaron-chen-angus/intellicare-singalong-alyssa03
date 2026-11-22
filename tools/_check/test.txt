@@ -1,0 +1,30 @@
+intelliCARE Sing-a-Long tests: 28/28 (100%)
+
+✔ YIN sine 110/220/440/880 Hz at 48 kHz within ±2¢
+✔ YIN sine 110/220/440/880 Hz at 44.1 kHz within ±2¢
+✔ YIN voice-like tone (5 harmonics) within ±5¢, no octave errors
+✔ YIN noise and silence → unvoiced
+✔ octave folding
+✔ frame score s(d) and judgement thresholds
+✔ storage scoping (song-scoped keys)
+✔ vocal map: sections, queue, maxPoints, no notes in talk
+✔ perfect (tone) singer: ≥98% PERFECT, points = maxPoints, all difficulties
+✔ silent singer: 0 notes hit
+✔ octave-shifted singer (−1 octave) still PERFECT
+✔ timing-lag search: 120 ms late singer recovered
+✔ +120¢ sharp singer is GOOD at best (Gentle)
+✔ full chain: PitchStream.ingest (median, hold-over) tone singer ≥98% PERFECT
+✔ vibrato estimator: 5.5 Hz ±40¢ detected, steady tone not
+✔ expression r: identical envelope → r≈1, flat envelope → 0
+✔ MPT counter bridges <150 ms gaps, splits at 200 ms
+✔ sustained-note finder and pitch-match trial error
+✔ Melody Flow: legato glide high, chopped low, overshoot penalised
+✔ breakdown echo scoring: sung echo ≥95, silent <1; ranked scope excludes breakdown
+✔ bleed check score: delayed copy of reference flagged, silence 0
+✔ latency calibration: onset 80 ms after clicks recovered
+✔ Demo gate: bleed-only rejected, singer +15 dB accepted; room calibration maths
+✔ Demo watchdog: leakage-like frames raise margin; strong singer does not
+✔ auto-sync converges to simulated 200 ms lag, then refines per phrase
+✔ routing guard: no mic→output path in Demo; voice-producing aids disabled
+✔ worklet source is self-contained (evaluates in a bare scope)
+✔ real vocal map: whole video is one sung performance, every line has notes and lyrics

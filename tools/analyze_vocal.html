@@ -1,0 +1,100 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>analyze_vocal</title></head>
+<body style="font:13px system-ui;background:#111;color:#ddd"><pre id="log">analyze_vocal.html — offline vocal-map analyser (pYIN-lite + Viterbi). Query: ?vocal=URL[&instr=URL][&lyrics=URL][&pinyin=URL]</pre><canvas id="cv" width="1200" height="300"></canvas>
+<script>
+'use strict';
+/* pYIN-lite: YIN CMNDF at several thresholds (Beta(2,18) weights) → per-frame pitch-bin probabilities → HMM/Viterbi (20-cent bins C2..C6 + unvoiced). */
+const Q = new URLSearchParams(location.search), LOG = [], log = m => { LOG.push(m); document.getElementById('log').textContent += '\n' + m; };
+const SR = 16000, WIN = 1024, HOP = 160, FMIN = 65.4, FMAX = 1046.5, BIN0 = 3600, BINW = 20, NB = 240;
+const beta = x => x * Math.pow(1 - x, 17) * 342;                        // Beta(2,18) pdf (unnormalised constant fine)
+const median = a => { const b = Array.from(a).sort((x, y) => x - y), n = b.length; return n ? (n % 2 ? b[(n - 1) >> 1] : (b[n / 2 - 1] + b[n / 2]) / 2) : NaN; };
+const hz2c = f => 1200 * Math.log2(f / 440) + 6900;
+async function decode(url) { const b = await (await fetch(url)).arrayBuffer(); const ctx = new OfflineAudioContext(1, 16000, SR); const ab = await ctx.decodeAudioData(b); const n = ab.length, out = new Float32Array(n); for (let c = 0; c < ab.numberOfChannels; c++) { const d = ab.getChannelData(c); for (let i = 0; i < n; i++) out[i] += d[i] / ab.numberOfChannels; } return out; }
+function rmsDb(x, sec) { const n = Math.floor(x.length / (SR * sec)), o = new Float32Array(n), L = SR * sec; for (let k = 0; k < n; k++) { let s = 0; for (let i = 0; i < L; i++) { const v = x[k * L + i]; s += v * v; } o[k] = 20 * Math.log10(Math.sqrt(s / L) + 1e-9); } return o; }
+function pyin(x) {
+  const nF = Math.floor((x.length - WIN) / HOP), W = WIN / 2, tMin = Math.floor(SR / FMAX), tMax = Math.ceil(SR / FMIN), cm = new Float32Array(W + 2);
+  const TH = [.05, .1, .15, .2, .25, .3, .35, .4, .45, .5], wt = TH.map(t => beta(t)); const wsum = wt.reduce((a, b) => a + b, 0);
+  const obs = new Float32Array(nF * NB), unv = new Float32Array(nF), cent = new Float32Array(nF * NB), rms = new Float32Array(nF);
+  for (let f = 0; f < nF; f++) {
+    const o = f * HOP; let run = 0, e2 = 0; for (let j = 0; j < WIN; j++) e2 += x[o + j] * x[o + j]; rms[f] = 20 * Math.log10(Math.sqrt(e2 / WIN) + 1e-9);
+    if (rms[f] < -55) { unv[f] = 1; continue; }
+    for (let t = 1; t <= tMax + 1; t++) { let s = 0; for (let j = 0; j < W; j++) { const e = x[o + j] - x[o + j + t]; s += e * e; } run += s; cm[t] = run > 1e-12 ? s * t / run : 1; }
+    let pv = 0;
+    TH.forEach((th, k) => { let tau = -1; for (let t = tMin; t <= tMax; t++) if (cm[t] < th) { while (t + 1 <= tMax && cm[t + 1] < cm[t]) t++; tau = t; break; }
+      if (tau < 0) return; const a = cm[tau - 1], b = cm[tau], c = cm[tau + 1], den = a - 2 * b + c, ts = den > 1e-12 ? tau + .5 * (a - c) / den : tau, c0 = hz2c(SR / ts), bin = Math.round((c0 - BIN0) / BINW); if (bin < 0 || bin >= NB) return;
+      const w = wt[k] / wsum * (1 - b * .5); obs[f * NB + bin] += w; cent[f * NB + bin] += w * c0; pv += w; });
+    unv[f] = Math.max(.02, 1 - pv);
+  }
+  // Viterbi: states 0..NB-1 pitch bins, NB = unvoiced. Transition: Gaussian on bin jump (sigma 2 bins, +-6), voiced<->unvoiced switch 0.01
+  const NS = NB + 1, lp = new Float32Array(nF * NS).fill(-1e9), bp = new Int16Array(nF * NS), tr = []; for (let d = -6; d <= 6; d++) tr.push([d, Math.log(Math.exp(-d * d / 8) * .99 / 5.0 + 1e-12)]);
+  const lsw = Math.log(.01), lstay = Math.log(.99);
+  const em = (f, s) => s === NB ? Math.log(unv[f] + 1e-6) : Math.log(obs[f * NB + s] * 0.9 + (obs[f * NB + s - 1] || 0) * .05 + (obs[f * NB + s + 1] || 0) * .05 + 1e-5);
+  for (let s = 0; s < NS; s++) lp[s] = em(0, s) + (s === NB ? 0 : Math.log(1 / NB));
+  for (let f = 1; f < nF; f++) {
+    for (let s = 0; s < NB; s++) { let best = -1e9, arg = 0; for (const [d, l] of tr) { const p = s - d; if (p < 0 || p >= NB) continue; const v = lp[(f - 1) * NS + p] + l; if (v > best) { best = v; arg = p; } } const vu = lp[(f - 1) * NS + NB] + lsw - Math.log(NB); if (vu > best) { best = vu; arg = NB; } lp[f * NS + s] = best + em(f, s); bp[f * NS + s] = arg; }
+    let best = lp[(f - 1) * NS + NB] + lstay, arg = NB; for (let s = 0; s < NB; s++) { const v = lp[(f - 1) * NS + s] + lsw; if (v > best) { best = v; arg = s; } } lp[f * NS + NB] = best + em(f, NB); bp[f * NS + NB] = arg;
+  }
+  const path = new Int16Array(nF); let s = 0, bv = -1e9; for (let k = 0; k < NS; k++) if (lp[(nF - 1) * NS + k] > bv) { bv = lp[(nF - 1) * NS + k]; s = k; }
+  for (let f = nF - 1; f >= 0; f--) { path[f] = s; s = bp[f * NS + s]; }
+  const f0 = new Float32Array(nF); for (let f = 0; f < nF; f++) { const b = path[f]; f0[f] = b === NB ? NaN : (obs[f * NB + b] > 0 ? cent[f * NB + b] / obs[f * NB + b] : BIN0 + b * BINW); } return { f0, rms };
+}
+function smooth(f0, k) { const o = new Float32Array(f0.length).fill(NaN), h = k >> 1; for (let i = 0; i < f0.length; i++) { if (isNaN(f0[i])) continue; const v = []; for (let j = i - h; j <= i + h; j++) if (j >= 0 && j < f0.length && !isNaN(f0[j])) v.push(f0[j]); o[i] = median(v); } return o; }
+function segment(f0) {                                                // V5.4
+  const notes = []; let cur = null, off = 0, gap = 0;
+  const close = () => { if (cur && cur.fr.length >= 10) { const m = cur.fr, a = Math.floor(m.length * .2), b = Math.ceil(m.length * .8); cur.c = median(m.slice(a, Math.max(a + 1, b))); notes.push(cur); } cur = null; };
+  for (let i = 0; i < f0.length; i++) {
+    const c = f0[i]; if (isNaN(c)) { gap++; if (gap >= 6) close(); continue; }
+    if (cur && gap > 0 && gap < 6) { for (let g = 0; g < gap; g++) cur.fr.push(cur.fr[cur.fr.length - 1]); } gap = 0;
+    if (!cur) { cur = { i0: i, fr: [c] }; off = 0; continue; }
+    const med = median(cur.fr.slice(-30)); if (Math.abs(c - med) > 80) { off++; if (off >= 5) { const keep = cur.fr.length - 0; close(); cur = { i0: i - 4, fr: [c] }; off = 0; continue; } } else off = 0; cur.fr.push(c); cur.i1 = i;
+  }
+  close(); notes.forEach(n => { n.i1 = n.i0 + n.fr.length - 1; });
+  const merged = []; notes.forEach(n => { const p = merged[merged.length - 1]; if (p && Math.abs(n.c - p.c) < 35 && (n.i0 - p.i1) < 4) { p.fr = p.fr.concat(n.fr); p.i1 = n.i1; p.c = median(p.fr.slice(Math.floor(p.fr.length * .2), Math.ceil(p.fr.length * .8))); } else merged.push(n); });
+  return merged.filter(n => n.fr.length >= 10).map(n => ({ t0: +(n.i0 / 100).toFixed(3), t1: +((n.i1 + 1) / 100).toFixed(3), c: Math.round(n.c), gold: false, vib: null, fr: n.fr }));
+}
+function vibrato(dev) {                                               // V5.5 (same estimator as the app)
+  const n = dev.length; if (n < 40) return null; const y = Array.from(dev); let S = [0, 0, 0, 0, 0], B = [0, 0, 0];
+  for (let i = 0; i < n; i++) { const x = i / (n - 1); S[0]++; S[1] += x; S[2] += x * x; S[3] += x ** 3; S[4] += x ** 4; B[0] += y[i]; B[1] += x * y[i]; B[2] += x * x * y[i]; }
+  const M = [[S[0], S[1], S[2], B[0]], [S[1], S[2], S[3], B[1]], [S[2], S[3], S[4], B[2]]];
+  for (let c = 0; c < 3; c++) { let p = c; for (let r = c + 1; r < 3; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;[M[c], M[p]] = [M[p], M[c]]; for (let r = 0; r < 3; r++) if (r !== c) { const f = M[r][c] / M[c][c]; for (let k = c; k < 4; k++) M[r][k] -= f * M[c][k]; } }
+  const co = [M[0][3] / M[0][0], M[1][3] / M[1][1], M[2][3] / M[2][2]], z = y.map((v, i) => { const x = i / (n - 1); return v - (co[0] + co[1] * x + co[2] * x * x); });
+  let e0 = 0; z.forEach(v => e0 += v * v); if (e0 < 1e-9) return null; let best = -1, bl = 0;
+  for (let l = 13; l <= 25 && l < n - 5; l++) { let s = 0; for (let i = 0; i + l < n; i++) s += z[i] * z[i + l]; s /= e0 * (n - l) / n; if (s > best) { best = s; bl = l; } }
+  const so = z.slice().sort((a, b) => a - b), ext = (so[Math.floor(.95 * (n - 1))] - so[Math.floor(.05 * (n - 1))]) / 2, rate = 100 / bl; return best > .4 && rate >= 4 && rate <= 8 && ext >= 20 && ext <= 150 ? { rate: +rate.toFixed(2), extent: Math.round(ext) } : null;
+}
+function talkSections(f0, notes, dur) {                               // design §17.1: proposals only
+  const inNote = new Uint8Array(f0.length); notes.forEach(n => { if (n.t1 - n.t0 >= .15) for (let i = Math.round(n.t0 * 100); i < Math.round(n.t1 * 100); i++) inNote[i] = 1; });
+  const win = []; for (let s = 0; s < dur; s++) { let vc = 0, st = 0, tg = 0, prev = null; const cs = []; for (let i = s * 100; i < (s + 1) * 100 && i < f0.length; i++) { const v = !isNaN(f0[i]); if (v) { vc++; st += inNote[i]; cs.push(f0[i]); } if (prev !== null && prev !== v) tg++; prev = v; }
+    const share = vc ? st / vc : 1; cs.sort((a, b) => a - b); win.push(vc > 15 && share < .25 && tg / 2 > 3 ? 1 : 0); }
+  const sm = win.map((_, i) => ((win[i - 1] || 0) + win[i] + (win[i + 1] || 0)) >= 2 ? 1 : 0); const segs = []; let a = -1;
+  sm.concat([0]).forEach((v, i) => { if (v && a < 0) a = i; if (!v && a >= 0) { if (i - a >= 2) segs.push([a, i]); a = -1; } }); return segs;
+}
+const KK = { major: [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88], minor: [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17] };
+function keyOf(notes) { const h = new Array(12).fill(0); notes.forEach(n => h[((Math.round(n.c / 100) % 12) + 12) % 12] += n.t1 - n.t0); let best = { r: -2 }; const cor = (a, b) => { const ma = a.reduce((x, y) => x + y) / 12, mb = b.reduce((x, y) => x + y) / 12; let s = 0, x = 0, y = 0; for (let i = 0; i < 12; i++) { s += (a[i] - ma) * (b[i] - mb); x += (a[i] - ma) ** 2; y += (b[i] - mb) ** 2; } return s / Math.sqrt(x * y); };
+  ['major', 'minor'].forEach(m => { for (let t = 0; t < 12; t++) { const r = cor(h, KK[m].map((_, i) => KK[m][(i - t + 12) % 12])); if (r > best.r) best = { r, t, m }; } }); return { tonic: ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'][best.t], mode: best.m, confidence: +best.r.toFixed(2) }; }
+const b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+async function text(u) { try { const r = await fetch(u); if (!r.ok) return null; return (await r.text()).split(/\r?\n/).map(s => s.trim()).filter(Boolean); } catch (e) { return null; } }
+(async () => {
+  try {
+    const x = await decode(Q.get('vocal')); const dur = Math.ceil(x.length / SR); log('vocal decoded: ' + dur + ' s'); const t0 = performance.now();
+    const { f0: raw } = pyin(x); const f0s = smooth(raw, 7); const f0 = new Float32Array(dur * 100).fill(NaN); f0s.forEach((v, i) => { if (i < f0.length) f0[i] = v; }); log('pYIN done in ' + ((performance.now() - t0) / 1000).toFixed(1) + ' s');
+    let notes = segment(f0); notes.forEach(n => { if (n.t1 - n.t0 >= .4) { const dev = n.fr.map(c => c - n.c); n.vib = vibrato(dev); } delete n.fr; });
+    const talk = talkSections(f0, notes, dur); const sections = []; let cur = 0; const T = [];
+    talk.forEach(([a, b], k) => { if (a > cur) T.push({ t0: cur, t1: a, type: 'singalong', name: 'Section ' + (T.length + 1) + ' (REVIEW: talk / breakdown / singalong / performance)' }); T.push({ t0: a, t1: b, type: 'talk', name: 'Talk ' + (k + 1) + ' (proposed)', tip: { en: '', zh: '' } }); cur = b; });
+    if (cur < dur) T.push({ t0: cur, t1: dur, type: 'singalong', name: 'Section ' + (T.length + 1) + ' (REVIEW)' }); const secs = T;
+    notes = notes.filter(n => !secs.some(s => s.type === 'talk' && n.t0 >= s.t0 && n.t0 < s.t1));
+    const phrases = []; notes.forEach((n, i) => { const p = phrases[phrases.length - 1]; if (p && n.t0 - notes[i - 1].t1 < .35) { p.t1 = n.t1; n.phrase = phrases.length - 1; } else { phrases.push({ t0: n.t0, t1: n.t1, text: '', words: [] }); n.phrase = phrases.length - 1; } });
+    phrases.forEach((p, pi) => { const mine = notes.filter(n => n.phrase === pi); let g = mine.filter(n => n.t1 - n.t0 >= .5).sort((a, b) => (b.t1 - b.t0) - (a.t1 - a.t0))[0] || mine.slice().sort((a, b) => b.c - a.c)[0]; if (g) g.gold = true; });
+    const ly = Q.get('lyrics') ? await text(Q.get('lyrics')) : null, py = Q.get('pinyin') ? await text(Q.get('pinyin')) : null;
+    if (ly) { if (ly.length !== phrases.length) log('WARN: ' + ly.length + ' lyric lines vs ' + phrases.length + ' phrases — check timing in the vocalmap'); phrases.forEach((p, i) => { if (ly[i]) p.text = ly[i]; if (py && py[i]) p.pinyin = py[i]; }); }
+    const rms50 = rmsDb(x, .05), mixDb = null;
+    let mix = null; if (Q.get('instr')) { const ins = await decode(Q.get('instr')), n = Math.min(ins.length, x.length), m = new Float32Array(n); for (let i = 0; i < n; i++) m[i] = ins[i] + x[i]; const md = rmsDb(m, .05); mix = new Int8Array(md.length); md.forEach((v, i) => mix[i] = Math.max(-128, Math.min(127, Math.round(v + 100)))); log('mixDb from instrumental + vocal'); } else log('NOTE: no instrumental → mixDb not computed (Demo-mode gate falls back to a static threshold; compute mixDb from the full video soundtrack for the best bleed rejection)');
+    const i16 = new Int16Array(f0.length); f0.forEach((v, i) => i16[i] = isNaN(v) ? -1 : Math.round(v)); const r8 = new Int8Array(rms50.length); rms50.forEach((v, i) => r8[i] = Math.max(-128, Math.min(127, Math.round(v + 100))));
+    const voiced = f0.filter(v => !isNaN(v)).length / f0.length; let jumps = 0; for (let i = 1; i < f0.length; i++) if (!isNaN(f0[i]) && !isNaN(f0[i - 1]) && Math.abs(f0[i] - f0[i - 1]) > 900) jumps++;
+    const lo = Math.min(...notes.map(n => n.c)), hi = Math.max(...notes.map(n => n.c)), qa = { voicedCoverage: +voiced.toFixed(3), octaveJumpsPer10s: +(jumps / (dur / 10)).toFixed(2), notesGe150msShare: +(notes.filter(n => n.t1 - n.t0 >= .15).length / Math.max(1, notes.length)).toFixed(3), rangeSemitones: Math.round((hi - lo) / 100), notes: notes.length, phrases: phrases.length };
+    if (voiced < .25 || voiced > .85) log('QA WARN: voiced coverage ' + qa.voicedCoverage + ' outside 25–85 %'); if (qa.octaveJumpsPer10s >= 1) log('QA WARN: octave jumps/10 s ' + qa.octaveJumpsPer10s); if (qa.notesGe150msShare < .6) log('QA WARN: notes ≥150 ms share ' + qa.notesGe150msShare); if (qa.rangeSemitones > 30) log('QA WARN: range > 2.5 octaves');
+    const map = { version: 1, song: { id: 'moonlight-in-the-city', duration: dur }, offsetMs: 0, hopMs: 10, f0: b64(new Uint8Array(i16.buffer)), rms: b64(new Uint8Array(r8.buffer)), mixDb: mix ? b64(new Uint8Array(mix.buffer)) : null, key: keyOf(notes), range: { loCents: lo, hiCents: hi }, notes, phrases, sections: secs, meta: { generator: 'analyze_vocal.html pYIN-lite v1', alignment: { lagMs: 0, corrPeak: null, note: 'not aligned: add the stem→video lag to offsetMs' }, qa, created: new Date().toISOString() } };
+    const cv = document.getElementById('cv'), g = cv.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, 1200, 300); g.fillStyle = '#888'; for (let i = 0; i < f0.length; i += 2) if (!isNaN(f0[i])) g.fillRect(i / f0.length * 1200, 300 - (f0[i] - lo + 300) / (hi - lo + 600) * 300, 1, 1); g.fillStyle = '#7FA6D6'; notes.forEach(n => g.fillRect(n.t0 / dur * 1200, 300 - (n.c - lo + 300) / (hi - lo + 600) * 300 - 2, Math.max(1, (n.t1 - n.t0) / dur * 1200), 4));
+    window.__RESULT = JSON.stringify({ map, qa, log: LOG, preview: cv.toDataURL('image/png') }); log('notes ' + notes.length + ', phrases ' + phrases.length + ', QA ' + JSON.stringify(qa)); document.title = 'DONE';
+  } catch (e) { window.__RESULT = JSON.stringify({ error: String(e && e.stack || e), log: LOG }); document.title = 'ERROR'; }
+})();
+</script></body></html>

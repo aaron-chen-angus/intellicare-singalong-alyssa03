@@ -1,0 +1,1 @@
+{"proto":"file:","secure":true,"ok":true,"ctx":"running","frames":243,"voiced":0,"medianCents":null,"note":null,"mic2dest":false,"sr":48000}

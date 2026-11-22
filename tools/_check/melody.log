@@ -1,0 +1,59 @@
+﻿lyric lines 38, subtitle segments 40
+line  0 5.8–10.6 segs 0  每颗心上某一个地方
+line  1 11.2–14.4 segs 1  总有个记忆挥不散
+line  2 16.4–21.2 segs 2  每个深夜某一个地方
+line  3 21.8–26.6 segs 3  总有着最深的思量
+line  4 27.4–31.2 segs 4  世间万千的变幻
+line  5 31.2–37.8 segs 5  爱把有情的人分两端
+line  6 38.2–41.8 segs 6  心若知道灵犀的方向
+line  7 42.2–47.6 segs 7  哪怕不能够朝夕相伴
+line  8 48.2–53.0 segs 8  城里的月光把梦照亮
+line  9 53.6–58.2 segs 9  请温暖他心房
+line 10 59.2–63.6 segs 10  看透了人间聚散
+line 11 64.0–68.6 segs 11  能不能多点快乐片段
+line 12 69.4–74.4 segs 12  城里的月光把梦照亮
+line 13 74.8–79.2 segs 13  请守护它身旁
+line 14 80.0–84.8 segs 14  若有一天能重逢
+line 15 85.4–90.6 segs 15  让幸福撒满整个夜晚
+line 16 99.4–103.2 segs 16  世间万千的变幻
+line 17 103.6–110.0 segs 17  爱把有情的人分两端
+line 18 110.2–114.0 segs 18  心若知道灵犀的方向
+line 19 114.2–120.0 segs 19  哪怕不能够朝夕相伴
+line 20 120.2–125.2 segs 20  城里的月光把梦照亮
+line 21 125.8–130.4 segs 21  请温暖他心房
+line 22 131.0–135.6 segs 22  看透了人间聚散
+line 23 136.2–141.0 segs 23  能不能多点快乐片段
+line 24 141.6–146.8 segs 24  城里的月光把梦照亮
+line 25 147.0–151.8 segs 25  请守护它身旁
+line 26 152.2–156.8 segs 26  若有一天能重逢
+line 27 157.2–162.6 segs 27  让幸福撒满整个夜晚
+line 28 163.0–167.8 segs 28  城里的月光把梦照亮
+line 29 168.2–173.0 segs 29  请温暖他心房
+line 30 173.6–178.0 segs 30  看透了人间聚散
+line 31 178.6–184.0 segs 31  能不能多点快乐片段
+line 32 184.4–189.4 segs 32  城里的月光把梦照亮
+line 33 189.8–194.4 segs 33  请守护它身旁
+line 34 195.0–199.6 segs 34  若有一天能重逢
+line 35 200.0–205.2 segs 35  让幸福撒满整个夜晚
+line 36 206.0–211.6 segs 36  若有一天能重逢
+line 37 213.2–226.8 segs 37+38  让幸福撒满整个夜晚
+video bytes 509138553
+audio 237.96 s, ch 2
+salience 23784 frames in 3.2 s
+singer median 6220 cents
+repeat ×2  mean disagreement 0.64 semitones  世间万千的变幻
+repeat ×2  mean disagreement 2.13 semitones  爱把有情的人分两端
+repeat ×2  mean disagreement 1.18 semitones  心若知道灵犀的方向
+repeat ×2  mean disagreement 1.30 semitones  哪怕不能够朝夕相伴
+repeat ×6  mean disagreement 1.34 semitones  城里的月光把梦照亮
+repeat ×3  mean disagreement 0.63 semitones  请温暖他心房
+repeat ×3  mean disagreement 0.65 semitones  看透了人间聚散
+repeat ×3  mean disagreement 1.60 semitones  能不能多点快乐片段
+repeat ×3  mean disagreement 0.74 semitones  请守护它身旁
+repeat ×4  mean disagreement 1.44 semitones  若有一天能重逢
+repeat ×4  mean disagreement 1.37 semitones  让幸福撒满整个夜晚
+REPEATS: mean disagreement 1.23 semitones; syllables replaced by consensus: 87
+octave-corrected notes: 16
+spike notes removed: 13
+QA {"notes":466,"phrases":38,"linesMatched":"38/38","voicedCoverage":0.748,"rangeSemitones":18,"lo":5355,"hi":7110,"singerMedian":6220}
+EMBEDDED 120 KB

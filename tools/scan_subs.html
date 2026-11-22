@@ -1,0 +1,35 @@
+<!DOCTYPE html><meta charset="utf-8"><title>scan</title><body style="background:#000">
+<video id="v" muted preload="auto"></video><canvas id="c" width="270" height="480"></canvas>
+<script>
+// Burned-in lyric detector: samples the subtitle band (orange text at ~74–88 % of the frame height) every STEP s.
+// Per sample: orange-pixel count, x-extent and a 54-column binary profile. A "segment" = consecutive samples showing the same text.
+const Q = new URLSearchParams(location.search), v = document.getElementById('v'), cv = document.getElementById('c'), g = cv.getContext('2d', { willReadFrequently: true });
+const STEP = +(Q.get('step') || .2), Y0 = Math.round(480 * .735), Y1 = Math.round(480 * .875), COLS = 54;
+const seek = t => new Promise(r => { const h = () => { v.removeEventListener('seeked', h); r(); }; v.addEventListener('seeked', h); v.currentTime = t; });
+const orange = (r, gg, b) => r > 175 && gg > 70 && gg < 215 && b < 120 && r - b > 95 && r >= gg;
+v.src = Q.get('video');
+v.onloadedmetadata = async () => {
+  const dur = v.duration, S = [];
+  for (let t = 0; t < dur; t += STEP) {
+    await seek(t); g.drawImage(v, 0, 0, 270, 480); const d = g.getImageData(0, Y0, 270, Y1 - Y0).data;
+    let n = 0, x0 = 999, x1 = -1; const col = new Uint16Array(COLS);
+    for (let y = 0; y < Y1 - Y0; y++) for (let x = 0; x < 270; x++) { const i = (y * 270 + x) * 4; if (orange(d[i], d[i + 1], d[i + 2])) { n++; col[Math.floor(x / 5)]++; if (x < x0) x0 = x; if (x > x1) x1 = x; } }
+    S.push({ t: +t.toFixed(2), n, x0, x1, p: Array.from(col, c => c >= 2 ? 1 : 0) });
+  }
+  // segments
+  const on = s => s.n >= 40, jac = (a, b) => { let i = 0, u = 0; for (let k = 0; k < COLS; k++) { if (a[k] || b[k]) u++; if (a[k] && b[k]) i++; } return u ? i / u : 0; };
+  const segs = []; let cur = null;
+  S.forEach((s, k) => {
+    if (!on(s)) { if (cur) { cur.t1 = s.t; segs.push(cur); cur = null; } return; }
+    if (cur && jac(cur.p, s.p) < .55 && Math.abs((s.x1 - s.x0) - (cur.x1 - cur.x0)) > 12) { cur.t1 = s.t; segs.push(cur); cur = null; }
+    if (!cur) cur = { t0: s.t, p: s.p.slice(), x0: s.x0, x1: s.x1, ns: [] };
+    cur.ns.push(s.n); for (let q = 0; q < COLS; q++) cur.p[q] = cur.p[q] | s.p[q]; cur.x0 = Math.min(cur.x0, s.x0); cur.x1 = Math.max(cur.x1, s.x1);
+  });
+  if (cur) { cur.t1 = dur; segs.push(cur); }
+  const good = segs.filter(s => s.t1 - s.t0 >= .5).map(s => ({ t0: s.t0, t1: s.t1, w: s.x1 - s.x0, n: Math.round(s.ns.reduce((a, b) => a + b, 0) / s.ns.length) }));
+  // contact sheet: band crop at each segment midpoint (for visual verification)
+  const sheet = document.createElement('canvas'), CW = 540, CH = 2 * (Y1 - Y0) + 6; sheet.width = CW; sheet.height = CH * good.length; const sg = sheet.getContext('2d');
+  for (let i = 0; i < good.length; i++) { await seek((good[i].t0 + good[i].t1) / 2); g.drawImage(v, 0, 0, 270, 480); sg.drawImage(cv, 0, Y0, 270, Y1 - Y0, 0, i * CH, 540, CH - 6); sg.fillStyle = '#0f0'; sg.font = '16px sans-serif'; sg.fillText(i + ': ' + good[i].t0.toFixed(1) + '–' + good[i].t1.toFixed(1) + ' w' + good[i].w, 4, i * CH + 16); }
+  window.__RESULT = JSON.stringify({ duration: dur, step: STEP, segs: good, samples: S.map(s => [s.t, s.n, s.x0, s.x1]), sheet: sheet.toDataURL('image/jpeg', .85) }); document.title = 'DONE';
+};
+</script>

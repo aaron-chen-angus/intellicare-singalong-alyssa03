@@ -1,0 +1,4 @@
+<!DOCTYPE html><meta charset="utf-8"><title>…</title><script>
+(async () => { const o = {}; for (const [k, c] of [['true', true], ['ec-off', { echoCancellation: false, noiseSuppression: false, autoGainControl: false }], ['ch1', { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }]]) { try { const s = await navigator.mediaDevices.getUserMedia({ audio: c }); o[k] = 'ok ' + s.getAudioTracks()[0].label; s.getTracks().forEach(t => t.stop()); } catch (e) { o[k] = e.name + ': ' + e.message; } }
+  try { const d = await navigator.mediaDevices.enumerateDevices(); o.devices = d.map(x => x.kind + ':' + x.label); } catch (e) { o.devices = String(e); } window.__probe = JSON.stringify(o); document.title = 'DONE'; })();
+</script>

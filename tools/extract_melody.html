@@ -1,0 +1,141 @@
+<!DOCTYPE html><meta charset="utf-8"><title>melody</title><body style="background:#111;color:#ddd;font:12px monospace"><pre id="log"></pre><canvas id="cv" width="2400" height="420"></canvas>
+<script>
+'use strict';
+/* Lead-vocal melody from the performance video's MIXED soundtrack (no stems available):
+   1. decode stereo at 16 kHz; STFT 2048 / hop 160 (10 ms)
+   2. centre-channel mask: keep energy common to L and R (lead vocal is panned centre), suppress side-panned instruments
+   3. harmonic-sum salience over C3..C6 in 10-cent bins (8 harmonics, weight 0.84^(h-1))
+   4. Viterbi pitch path (jump cost) restricted to the lyric lines (timed from the burned-in subtitles)
+   5. voicing inside lines from vocal-band energy + salience contrast; octave correction toward the singer's median
+   6. notes / phrases / one character per note; vocal map output (same schema as tools/analyze_vocal.html)            */
+const Q = new URLSearchParams(location.search), LOG = [], log = m => { LOG.push(m); document.getElementById('log').textContent += m + '\n'; };
+const SR = 16000, N = 2048, HOP = 160, C0 = 5200, C1 = 8200, BW = 10, NB = (C1 - C0) / BW + 1, NH = 8;
+const median = a => { const b = Array.from(a).filter(x => !isNaN(x)).sort((x, y) => x - y), n = b.length; return n ? (n % 2 ? b[(n - 1) >> 1] : (b[n / 2 - 1] + b[n / 2]) / 2) : NaN; };
+const xhr = (u, type) => new Promise((res, rej) => { const r = new XMLHttpRequest(); r.open('GET', u); r.responseType = type; r.onload = () => (r.status === 200 || r.status === 0) && r.response ? res(r.response) : rej(new Error('load ' + u + ' ' + r.status)); r.onerror = () => rej(new Error('xhr ' + u)); r.send(); });
+function fft(re, im) { const n = re.length; for (let i = 1, j = 0; i < n; i++) { let bit = n >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; } }
+  for (let len = 2; len <= n; len <<= 1) { const a = -2 * Math.PI / len, wr = Math.cos(a), wi = Math.sin(a); for (let i = 0; i < n; i += len) { let cr = 1, ci = 0; for (let k = 0; k < len / 2; k++) { const ur = re[i + k], ui = im[i + k], vr = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci, vi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr; re[i + k] = ur + vr; im[i + k] = ui + vi; re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi; const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t; } } } }
+const b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+(async () => { try {
+  const subs = JSON.parse(await xhr(Q.get('subs'), 'text'));
+  const lines = (await xhr(Q.get('lyrics'), 'text')).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const pys = Q.get('pinyin') ? (await xhr(Q.get('pinyin'), 'text')).split(/\r?\n/).map(s => s.trim()).filter(Boolean) : [];
+  log('lyric lines ' + lines.length + ', subtitle segments ' + subs.segs.length);
+  /* ---------- align lyric lines to subtitle segments (DP on text width vs character count) ---------- */
+  const segs = subs.segs, c = lines.map(l => [...l].length), K = segs.length, L = lines.length;
+  const charW = segs.reduce((s, x) => s + x.w, 0) / Math.max(1, c.reduce((a, b) => a + b, 0) * K / Math.max(K, L));
+  const INF = 1e9, D = Array.from({ length: L + 1 }, () => new Float64Array(K + 1).fill(INF)), B = Array.from({ length: L + 1 }, () => new Int8Array(K + 1));
+  D[0][0] = 0; const cst = (i, w) => { const e = w / charW - c[i]; return e * e / Math.max(3, c[i]); };
+  for (let i = 0; i <= L; i++) for (let j = 0; j <= K; j++) { const d = D[i][j]; if (d >= INF) continue;
+    if (i < L && j < K && d + cst(i, segs[j].w) < D[i + 1][j + 1]) { D[i + 1][j + 1] = d + cst(i, segs[j].w); B[i + 1][j + 1] = 1; }
+    if (i < L && j + 1 < K && d + cst(i, segs[j].w + segs[j + 1].w) + 1.5 < D[i + 1][j + 2]) { D[i + 1][j + 2] = d + cst(i, segs[j].w + segs[j + 1].w) + 1.5; B[i + 1][j + 2] = 2; }
+    if (j < K && d + 4 < D[i][j + 1]) { D[i][j + 1] = d + 4; B[i][j + 1] = 3; }
+    if (i < L && d + 12 < D[i + 1][j]) { D[i + 1][j] = d + 12; B[i + 1][j] = 4; } }
+  const spans = new Array(L).fill(null); { let i = L, j = K; while (i > 0 || j > 0) { const b = B[i][j]; if (b === 1) { spans[i - 1] = { t0: segs[j - 1].t0, t1: segs[j - 1].t1, segs: [j - 1] }; i--; j--; } else if (b === 2) { spans[i - 1] = { t0: segs[j - 2].t0, t1: segs[j - 1].t1, segs: [j - 2, j - 1] }; i--; j -= 2; } else if (b === 3) { j--; } else if (b === 4) { i--; } else break; } }
+  spans.forEach((s, i) => log(`line ${String(i).padStart(2)} ${s ? s.t0.toFixed(1) + '–' + s.t1.toFixed(1) + ' segs ' + s.segs.join('+') : 'NOT FOUND'}  ${lines[i]}`));
+  /* ---------- decode audio ---------- */
+  const buf = await xhr(Q.get('video'), 'arraybuffer'); log('video bytes ' + buf.byteLength);
+  const ab = await new OfflineAudioContext(2, SR, SR).decodeAudioData(buf); const dur = ab.duration; log('audio ' + dur.toFixed(2) + ' s, ch ' + ab.numberOfChannels);
+  const Lc = ab.getChannelData(0), Rc = ab.numberOfChannels > 1 ? ab.getChannelData(1) : Lc, nF = Math.floor((Lc.length - N) / HOP) + 1;
+  /* ---------- STFT + centre mask + salience ---------- */
+  const win = new Float32Array(N).map((_, i) => .5 - .5 * Math.cos(2 * Math.PI * i / N)), re = new Float64Array(N), im = new Float64Array(N), V = new Float32Array(N / 2);
+  const sal = new Float32Array(nF * NB), vocE = new Float32Array(nF), mixDbF = new Float32Array(nF), bf = new Float32Array(NB);
+  for (let b = 0; b < NB; b++) bf[b] = 440 * Math.pow(2, (C0 + b * BW - 6900) / 1200);
+  const t0w = performance.now();
+  for (let f = 0; f < nF; f++) {
+    const o = f * HOP; let e2 = 0; for (let i = 0; i < N; i++) { re[i] = Lc[o + i] * win[i]; im[i] = Rc[o + i] * win[i]; const m = (Lc[o + i] + Rc[o + i]) / 2; e2 += m * m; }
+    mixDbF[f] = 10 * Math.log10(e2 / N + 1e-12); fft(re, im);
+    let ev = 0; for (let k = 1; k < N / 2; k++) { const ar = (re[k] + re[N - k]) / 2, ai = (im[k] - im[N - k]) / 2, br = (im[k] + im[N - k]) / 2, bi = (re[N - k] - re[k]) / 2;   // XL = (ar,ai), XR = (br,bi)
+      const mr = (ar + br) / 2, mi = (ai + bi) / 2, sr_ = (ar - br) / 2, si = (ai - bi) / 2, M = Math.hypot(mr, mi), S = Math.hypot(sr_, si), w = Math.max(0, 1 - S / (M + 1e-9)); V[k] = Math.sqrt(M * w * w); const hz = k * SR / N; if (hz > 150 && hz < 4000) ev += M * w * w * M * w * w; }
+    vocE[f] = 10 * Math.log10(ev + 1e-12);
+    for (let b = 0; b < NB; b++) { let s = 0, so = 0, se = 0, wt = 1; for (let h = 1; h <= NH; h++) { const kk = bf[b] * h * N / SR; if (kk >= N / 2 - 2) break; const k0 = Math.floor(kk), fr = kk - k0, a = Math.max(V[k0] * (1 - fr) + V[k0 + 1] * fr, .9 * Math.max(V[k0], V[k0 + 1])); s += wt * a; if (h % 2) so += a; else se += a; wt *= .84; }
+      sal[f * NB + b] = s * Math.min(1, 1.6 * so / (so + se + 1e-9)); }   // sub-octave guard: a candidate one octave below the true pitch has (almost) no energy at its odd harmonics
+  }
+  log('salience ' + nF + ' frames in ' + ((performance.now() - t0w) / 1000).toFixed(1) + ' s');
+  /* ---------- Viterbi within each lyric line ---------- */
+  const f0 = new Float32Array(Math.ceil(dur * 100)).fill(NaN), J = 25, jumpCost = .04;
+  spans.forEach((sp, li) => { if (!sp) return; const a = Math.max(0, Math.floor((sp.t0 - .15) * 100)), z = Math.min(nF - 1, Math.ceil((sp.t1 + .15) * 100)), n = z - a + 1; if (n < 5) return;
+    let prev = new Float64Array(NB), cur = new Float64Array(NB); const back = new Int16Array(n * NB);
+    const em = f => { let mx = 1e-9; for (let b = 0; b < NB; b++) mx = Math.max(mx, sal[f * NB + b]); return b => Math.log(sal[f * NB + b] / mx + 1e-3); };
+    let E = em(a); for (let b = 0; b < NB; b++) prev[b] = E(b);
+    for (let t = 1; t < n; t++) { E = em(a + t); for (let b = 0; b < NB; b++) { let best = -1e18, arg = b; for (let d = -J; d <= J; d++) { const p = b + d; if (p < 0 || p >= NB) continue; const v = prev[p] - jumpCost * Math.abs(d); if (v > best) { best = v; arg = p; } }
+        // allow a free note change of any size at a small fixed cost (singers leap)
+        cur[b] = best + E(b); back[t * NB + b] = arg; }
+      let gb = 0; for (let b = 1; b < NB; b++) if (prev[b] > prev[gb]) gb = b; for (let b = 0; b < NB; b++) { const v = prev[gb] - 2.2 + E(b); if (v > cur[b]) { cur[b] = v; back[t * NB + b] = gb; } }
+      [prev, cur] = [cur, prev]; }
+    let s = 0; for (let b = 1; b < NB; b++) if (prev[b] > prev[s]) s = b;
+    for (let t = n - 1; t >= 0; t--) { f0[a + t] = C0 + s * BW; s = back[t * NB + s]; }
+    // voicing within the line: vocal-band energy relative to the line's loud frames
+    const ve = []; for (let t = 0; t < n; t++) ve.push(vocE[a + t]); const ref = [...ve].sort((x, y) => x - y)[Math.floor(.85 * (n - 1))];
+    for (let t = 0; t < n; t++) if (ve[t] < ref - 14 || a + t < sp.t0 * 100 - 10) f0[a + t] = NaN;
+  });
+  // octave correction toward the singer's median, then 9-frame median smoothing
+  const med = median(f0); log('singer median ' + Math.round(med) + ' cents');
+  for (let i = 0; i < f0.length; i++) if (!isNaN(f0[i])) { while (f0[i] > med + 900) f0[i] -= 1200; while (f0[i] < med - 900) f0[i] += 1200; }
+  const sm = new Float32Array(f0.length).fill(NaN); for (let i = 0; i < f0.length; i++) { if (isNaN(f0[i])) continue; const w = []; for (let j = i - 4; j <= i + 4; j++) if (j >= 0 && j < f0.length && !isNaN(f0[j])) w.push(f0[j]); sm[i] = median(w); }
+  /* ---------- syllables: one sung character = one syllable; split each line at the (chars−1) strongest boundaries ----------
+     boundary strength = dip of the vocal-band energy below its neighbours (consonant / re-articulation) + an unvoiced gap + a pitch step   */
+  const ve = new Float32Array(nF); for (let i = 0; i < nF; i++) { let s2 = 0, c2 = 0; for (let j = i - 2; j <= i + 2; j++) if (j >= 0 && j < nF) { s2 += vocE[j]; c2++; } ve[i] = s2 / c2; }
+  const syl = spans.map((sp, li) => {
+    if (!sp) return null; const nc = [...lines[li]].length; let a = Math.floor(sp.t0 * 100), z = Math.min(nF - 1, Math.ceil(sp.t1 * 100));
+    while (a < z && isNaN(sm[a])) a++; while (z > a && isNaN(sm[z])) z--; if (z - a < nc * 8) { log('WARN line ' + li + ' too short for ' + nc + ' syllables'); return null; }
+    const d = new Float32Array(z - a + 1);
+    for (let i = a + 6; i <= z - 6; i++) { let l = -1e9, r = -1e9; for (let j = Math.max(a, i - 14); j < i; j++) l = Math.max(l, ve[j]); for (let j = i + 1; j <= Math.min(z, i + 14); j++) r = Math.max(r, ve[j]);
+      const p1 = sm[i - 5], p2 = sm[i + 5]; d[i - a] = (l + r) / 2 - ve[i] + (isNaN(sm[i]) ? 6 : 0) + (!isNaN(p1) && !isNaN(p2) && Math.abs(p2 - p1) > 80 ? 3 : 0); }
+    const B = [], ord = Array.from(d.keys()).sort((x, y) => d[y] - d[x]);
+    for (const k of ord) { if (B.length >= nc - 1) break; if (k < 6 || k > z - a - 6) continue; if (B.every(b => Math.abs(b - k) >= 12)) B.push(k); }
+    while (B.length < nc - 1) B.push(Math.round((B.length + 1) * (z - a) / nc));          // not enough clear boundaries: fill evenly
+    B.sort((x, y) => x - y); const edges = [a, ...B.map(b => a + b), z + 1];
+    return Array.from({ length: nc }, (_, k) => { const s0 = edges[k], s1 = edges[k + 1], fr = []; for (let i = s0; i < s1; i++) fr.push(sm[i]);
+      const mid = fr.slice(Math.floor(fr.length * .2), Math.ceil(fr.length * .8)); let c = median(mid); if (isNaN(c)) c = median(fr); return { s0, s1, c }; });
+  });
+  /* ---------- consensus across repeated lines (choruses are sung 3×): a syllable that disagrees with the others by > 150 ¢ takes the consensus ---------- */
+  const groups = {}; syl.forEach((s, li) => { if (s) (groups[lines[li]] = groups[lines[li]] || []).push(li); });
+  const foldTo = (v, ref) => { while (v - ref > 600) v -= 1200; while (ref - v > 600) v += 1200; return v; };
+  let agreeSum = 0, agreeN = 0, fixed = 0;
+  Object.entries(groups).forEach(([txt, ids]) => { if (ids.length < 2) return; const nc = syl[ids[0]].length; const errs = [];
+    for (let k = 0; k < nc; k++) { const vals = ids.map(li => syl[li][k].c).filter(v => !isNaN(v)); if (vals.length < 2) continue; const ref = median(vals), fv = vals.map(v => foldTo(v, ref)), cons = median(fv);
+      fv.forEach(v => { errs.push(Math.abs(v - cons)); });
+      ids.forEach(li => { const s = syl[li][k]; if (isNaN(s.c) || Math.abs(foldTo(s.c, cons) - cons) > 150) { const delta = isNaN(s.c) ? 0 : cons - s.c; for (let i = s.s0; i < s.s1; i++) if (!isNaN(sm[i])) sm[i] += delta; s.c = cons; fixed++; } else s.c = foldTo(s.c, cons); }); }
+    const me = errs.length ? errs.reduce((x, y) => x + y, 0) / errs.length : 0; agreeSum += me * errs.length; agreeN += errs.length; log(`repeat ×${ids.length}  mean disagreement ${(me / 100).toFixed(2)} semitones  ${txt}`); });
+  log('REPEATS: mean disagreement ' + (agreeN ? (agreeSum / agreeN / 100).toFixed(2) : '–') + ' semitones; syllables replaced by consensus: ' + fixed);
+  /* ---------- notes: one per syllable; a long syllable whose pitch moves (melisma, e.g. 夜晚~~~) is split into sub-notes ---------- */
+  const phrases = [], outNotes = [];
+  spans.forEach((sp, li) => { const S = syl[li]; if (!S) return; const chars = [...lines[li]], py = (pys[li] || '').split(/\s+/).filter(Boolean), pi = phrases.length, mine = [];
+    S.forEach((s, k) => { if (isNaN(s.c)) return; const len = s.s1 - s.s0; let parts = [{ a: s.s0, b: s.s1 }];
+      if (len >= 45) { parts = []; let a0 = s.s0, refc = NaN, run = 0;
+        for (let i = s.s0; i < s.s1; i++) { const v = sm[i]; if (isNaN(v)) continue; if (isNaN(refc)) refc = v; if (Math.abs(v - refc) > 80) { if (++run >= 12 && i - 12 - a0 >= 15) { parts.push({ a: a0, b: i - 12 }); a0 = i - 12; refc = v; run = 0; } } else { run = 0; refc = .9 * refc + .1 * v; } }
+        parts.push({ a: a0, b: s.s1 }); }
+      parts.forEach((p, q) => { const fr = []; for (let i = p.a; i < p.b; i++) if (!isNaN(sm[i])) fr.push(sm[i]); const c = q === 0 && parts.length === 1 ? s.c : (fr.length ? median(fr.slice(Math.floor(fr.length * .2), Math.ceil(fr.length * .8))) : s.c);
+        const n = { t0: +(p.a / 100).toFixed(2), t1: +((p.b - 2) / 100).toFixed(2), c: Math.round(c), gold: false, vib: null, phrase: pi, syl: k }; if (n.t1 - n.t0 >= .1) { mine.push(n); outNotes.push(n); } }); });
+    if (!mine.length) { log('WARN no notes in line ' + li); return; }
+    const g = mine.slice().sort((x, y) => (y.t1 - y.t0) - (x.t1 - x.t0))[0]; if (g.t1 - g.t0 >= .4) g.gold = true;
+    const words = chars.map((ch, k) => ({ t: +(S[k].s0 / 100).toFixed(2), w: ch, py: py[k] || '' }));
+    phrases.push({ t0: mine[0].t0, t1: mine[mine.length - 1].t1, text: lines[li], pinyin: py.join(' '), words, line: li }); });
+  outNotes.forEach(n => delete n.syl);
+  // display octave: a note more than 8 semitones from its line's median is an octave error of the tracker → move it (and its contour) next to the line
+  let octFix = 0; phrases.forEach((p, pi) => { const ns = outNotes.filter(n => n.phrase === pi), m = median(ns.map(n => n.c));
+    ns.forEach(n => { let d = 0; while (n.c + d - m > 800) d -= 1200; while (m - (n.c + d) > 800) d += 1200; if (d) { n.c += d; octFix++; for (let i = Math.round(n.t0 * 100); i <= Math.round(n.t1 * 100); i++) if (!isNaN(sm[i])) sm[i] += d; } }); });
+  log('octave-corrected notes: ' + octFix);
+  // spikes: a short note (< 0.3 s) more than 6 semitones from BOTH neighbours in its line is a consonant/tracker glitch → drop it and its contour
+  let spikes = 0; for (let k = outNotes.length - 1; k >= 0; k--) { const n = outNotes[k], p = outNotes[k - 1], q = outNotes[k + 1]; if (n.t1 - n.t0 >= .3) continue;
+    const far = o => !o || o.phrase !== n.phrase || Math.abs(o.c - n.c) > 600; if (far(p) && far(q) && ((p && p.phrase === n.phrase) || (q && q.phrase === n.phrase))) { for (let i = Math.round(n.t0 * 100); i <= Math.round(n.t1 * 100); i++) sm[i] = NaN; outNotes.splice(k, 1); spikes++; } }
+  // contour glitches between notes (frames > 6 semitones from the surrounding notes) are blanked too
+  for (let i = 0; i < sm.length; i++) if (!isNaN(sm[i])) { const t = i / 100; let a = null, b = null; for (const n of outNotes) { if (n.t1 <= t) a = n; else { b = n; break; } } const ref = a && b ? Math.min(Math.abs(sm[i] - a.c), Math.abs(sm[i] - b.c)) : 0; if (ref > 600) sm[i] = NaN; }
+  phrases.forEach((p, pi) => { const ns = outNotes.filter(n => n.phrase === pi); if (ns.length) { p.t0 = ns[0].t0; p.t1 = ns[ns.length - 1].t1; } });
+  log('spike notes removed: ' + spikes);
+  /* ---------- encode ---------- */
+  const i16 = new Int16Array(sm.length); sm.forEach((v, i) => i16[i] = isNaN(v) ? -1 : Math.round(v));
+  const fr50 = Math.floor(nF / 5), r8 = new Int8Array(fr50), m8 = new Int8Array(fr50); for (let k = 0; k < fr50; k++) { let a1 = -200, a2 = -200; for (let z = 0; z < 5; z++) { a1 = Math.max(a1, vocE[k * 5 + z] - 40); a2 = Math.max(a2, mixDbF[k * 5 + z]); } r8[k] = Math.max(-128, Math.min(127, Math.round(a1 + 100))); m8[k] = Math.max(-128, Math.min(127, Math.round(a2 + 100))); }
+  const lo = Math.min(...outNotes.map(n => n.c)), hi = Math.max(...outNotes.map(n => n.c)), voiced = sm.filter(v => !isNaN(v)).length / sm.length;
+  const qa = { notes: outNotes.length, phrases: phrases.length, linesMatched: spans.filter(Boolean).length + '/' + L, voicedCoverage: +voiced.toFixed(3), rangeSemitones: Math.round((hi - lo) / 100), lo, hi, singerMedian: Math.round(med) };
+  const map = { version: 1, song: { id: 'moonlight-in-the-city', duration: +dur.toFixed(2) }, offsetMs: 0, hopMs: 10, f0: b64(new Uint8Array(i16.buffer)), rms: b64(new Uint8Array(r8.buffer)), mixDb: b64(new Uint8Array(m8.buffer)),
+    key: { tonic: '', mode: '', confidence: 0 }, range: { loCents: lo, hiCents: hi }, notes: outNotes, phrases, sections: [{ t0: 0, t1: +dur.toFixed(2), type: 'performance', name: 'Full performance / 完整演唱' }],
+    meta: { generator: 'extract_melody.html (centre-channel harmonic salience + Viterbi on the video soundtrack; lines timed from burned-in subtitles)', qa, created: new Date().toISOString() } };
+  // preview image: notes + contour + line boundaries
+  const cv = document.getElementById('cv'), g = cv.getContext('2d'), W = cv.width, H = cv.height, X = t => t / dur * W, Y = cc => H - (cc - lo + 300) / (hi - lo + 600) * H; g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+  phrases.forEach(p => { g.fillStyle = 'rgba(255,217,138,.12)'; g.fillRect(X(p.t0), 0, X(p.t1) - X(p.t0), H); }); g.fillStyle = '#888'; for (let i = 0; i < sm.length; i++) if (!isNaN(sm[i])) g.fillRect(X(i / 100), Y(sm[i]), 1, 1);
+  g.fillStyle = '#7FA6D6'; outNotes.forEach(n => g.fillRect(X(n.t0), Y(n.c) - 2, Math.max(1, X(n.t1) - X(n.t0)), 4));
+  log('QA ' + JSON.stringify(qa));
+  window.__RESULT = JSON.stringify({ map, qa, log: LOG, preview: cv.toDataURL('image/png') }); document.title = 'DONE';
+} catch (e) { window.__RESULT = JSON.stringify({ error: String(e && e.stack || e), log: LOG }); document.title = 'ERROR'; } })();
+</script>

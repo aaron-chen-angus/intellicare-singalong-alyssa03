@@ -1,0 +1,1 @@
+{"proto":"http:","secure":true,"ok":false,"name":"NotSupportedError","msg":"Not supported","step":"getUserMedia","gum":true}
